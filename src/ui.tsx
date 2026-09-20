@@ -41,7 +41,7 @@ export function App({editor:e}:{editor:Editor}){
   const status={loading:'正在恢复',saving:'正在保存…',saved:'已在此浏览器保存',error:'自动保存失败',disabled:'请下载工程备份'}[e.saveState];
   return <main className={`app ${drop?'is-dropping':''}`} onDragOver={event=>{if(event.dataTransfer.types.includes('Files')){event.preventDefault();setDrop(true);}}} onDragLeave={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node))setDrop(false);}} onDrop={event=>{if(event.dataTransfer.files.length){event.preventDefault();setDrop(false);importFiles([...event.dataTransfer.files]);}}}>
     <header className="topbar">
-      <div className="brand"><Stack weight="duotone" size={25}/><span>Light <b>PS</b></span></div>
+      <div className="brand"><Stack weight="duotone" size={25}/><span>lite <b>ps</b></span></div>
       <div className="header-actions"><button onClick={()=>setDialog('new')} disabled={busy}><FilePlus size={17}/><span>新建</span></button><button onClick={()=>projectRef.current?.click()} disabled={busy}><FolderOpen size={17}/><span>打开</span></button><button onClick={()=>fileRef.current?.click()} disabled={busy}><Plus size={17}/><span>添加图片</span></button></div>
       <div className="header-spacer"/>{e.hostConnection&&<button className="connection-button" onClick={()=>e.hostConnection?.disconnect()} title={e.hostConnection.origin}>已连接 · 断开</button>}
       <button className="save-project" onClick={()=>run(()=>e.saveProject())} disabled={busy}><DownloadSimple size={17}/><span>保存工程</span></button>

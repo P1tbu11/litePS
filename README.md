@@ -1,4 +1,4 @@
-# Light PS
+# lite ps
 
 独立的轻量在线图片编辑器，用于已有专业修图工具之外的快速修改。界面参考 Compositor 的原生 Mac 风格；Photopea 是品类与成熟度参照，不是功能全量目标。
 

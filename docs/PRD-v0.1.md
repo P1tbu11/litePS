@@ -1,4 +1,4 @@
-# Light-PS 产品需求与决策稿 v0.1
+# lite ps 产品需求与决策稿 v0.1
 
 日期：2026-09-20。状态：产品定位已按用户纠正更新；功能覆盖与 PSD 兼容目标待对齐，技术选型未冻结，也未开始产品实现。
 
@@ -60,7 +60,7 @@ Agent 创建工程、添加素材、安排初始位置 → 请求人工检查 �
 
 ### 2.4 Figma 往返
 
-用户在 Figma 选取图像或 Frame → 插件提取图片/渲染快照 → Light-PS 编辑 → 插件插入新图片或明确替换指定图片填充。
+用户在 Figma 选取图像或 Frame → 插件提取图片/渲染快照 → lite ps 编辑 → 插件插入新图片或明确替换指定图片填充。
 
 首版 Figma 接入以位图交换为边界，不承诺把 Figma 文本、约束、Auto Layout、效果和图层蒙版完整转换成可无损互改的工程。Figma 官方 Plugin API 支持编辑文档，其图片流程通过图片数据与节点填充实现；据此，本方案选择插件作为写回入口。[Plugin API](https://developers.figma.com/docs/plugins/)、[图片读写说明](https://developers.figma.com/docs/plugins/working-with-images/)
 

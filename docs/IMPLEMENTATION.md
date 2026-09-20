@@ -1,4 +1,4 @@
-# Light-PS implementation status
+# lite ps implementation status
 
 更新时间：2026-09-20
 

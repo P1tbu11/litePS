@@ -1,4 +1,4 @@
-# Light-PS 接入说明
+# lite ps 接入说明
 
 更新时间：2026-09-20
 
@@ -6,7 +6,7 @@
 
 ## 1. 浏览器内 Agent：直接调用页面 API
 
-当 Agent 能控制打开 Light-PS 的浏览器页面时，直接使用 `window.__LIGHT_PS__`。典型的浏览器 Agent 会把下面的代码放进页面 evaluate/API 调用中：
+当 Agent 能控制打开 lite ps 的浏览器页面时，直接使用 `window.__LIGHT_PS__`。典型的浏览器 Agent 会把下面的代码放进页面 evaluate/API 调用中：
 
 ```js
 await window.__LIGHT_PS__.ready;
@@ -78,7 +78,7 @@ const file = new Blob([result.bytes], { type: result.type });
 
 ## 2. 其他画布工具：iframe 宿主通信
 
-如果节点画布允许嵌入 iframe，宿主页面加载 Light-PS 后发起握手：
+如果节点画布允许嵌入 iframe，宿主页面加载 lite ps 后发起握手：
 
 ```js
 const LIGHT_PS_ORIGIN = 'http://127.0.0.1:5176';
@@ -113,7 +113,7 @@ iframe.contentWindow.postMessage(
 );
 ```
 
-Light-PS 会显示“允许连接当前工程？”的用户确认。用户允许后，宿主收到 `MessagePort`，之后的请求格式与同页 API 一致：
+lite ps 会显示“允许连接当前工程？”的用户确认。用户允许后，宿主收到 `MessagePort`，之后的请求格式与同页 API 一致：
 
 ```js
 function call(method, params = {}) {
@@ -135,7 +135,7 @@ const result = await call('export.composite', { type: 'image/png' });
 对 TapNow、LightAI 或其他节点画布，适配器只需要负责四件事：
 
 1. 把节点输入图片转为 `layers.import` 的二进制素材。
-2. 保存宿主侧的 `documentId`、任务 ID 和 Light-PS revision。
+2. 保存宿主侧的 `documentId`、任务 ID 和 lite ps revision。
 3. 监听 `document.changed`，用户点击完成后调用 `export.composite`、`export.mask` 或 `export.project`。
 4. 把产物写回下游节点，并携带来源 revision，避免旧结果覆盖新编辑。
 
