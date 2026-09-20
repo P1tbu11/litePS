@@ -10,9 +10,11 @@ export async function runRasterTests(){
   const prepared=await assets.prepare(await toBlob(red));assets.accept([prepared]);
   const layer=createLayer(doc,8,8,prepared.asset.id,'red');doc.layers=[layer];
   check(pixel(raster.composite(doc)).join(',')==='255,0,0,255','native-resolution red pixels');
-  layer.mask=[{points:[{x:2.5,y:2.5}],radius:2,hardness:1,opacity:1,color:'#ffffff',mode:'erase'}];
+  layer.mask={assetId:null,disabled:false,strokes:[{points:[{x:2.5,y:2.5}],radius:2,hardness:1,opacity:1,color:'#000000',mode:'paint'}]};
+  check(pixel(raster.composite(doc))[3]===0,'black mask paint hides pixels');
+  layer.mask={assetId:null,disabled:false,strokes:[{points:[{x:2.5,y:2.5}],radius:2,hardness:1,opacity:1,color:'#ffffff',mode:'erase'}]};
   check(pixel(raster.composite(doc))[3]===0,'erase affects source alpha');
-  layer.mask.push({...layer.mask[0],mode:'restore'});
+  layer.mask.strokes.push({...layer.mask.strokes[0],mode:'restore'});
   check(pixel(raster.composite(doc))[3]===255,'restoring mask recovers original pixels');
   const blue=surface(8,8);context(blue).fillStyle='#0000ff';context(blue).fillRect(0,0,8,8);
   const p2=await assets.prepare(await toBlob(blue));assets.accept([p2]);const l2=createLayer(doc,8,8,p2.asset.id,'blue');l2.blend='multiply';doc.layers.push(l2);

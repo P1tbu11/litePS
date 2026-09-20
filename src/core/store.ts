@@ -1,4 +1,4 @@
-import { createDocument, validateDocument, LIMITS, EditorError } from './model.ts';
+import { createDocument, validateDocument, LIMITS, EditorError, isRaster, walkLayers } from './model.ts';
 import type { Document } from './model.ts';
 
 type Entry = { before: Document; after: Document; label: string; bytes: number };
@@ -33,6 +33,10 @@ export class EditorStore {
   redo() { if (!this.canRedo) return; this.doc = this.history[this.cursor++].after; this.emit(); }
   // Includes undo/redo assets, so garbage collection cannot break a retained action.
   referencedAssets() {
-    return new Set([this.doc, ...this.history.flatMap(e => [e.before,e.after])].flatMap(d => d.layers.map(l => l.assetId).filter((id): id is string => id !== null)));
+    return new Set([this.doc, ...this.history.flatMap(e => [e.before,e.after])].flatMap(d => {
+      const ids: string[] = [];
+      walkLayers(d.layers, layer => { if (isRaster(layer) && layer.assetId) ids.push(layer.assetId); if (layer.mask?.assetId) ids.push(layer.mask.assetId); });
+      return ids;
+    }));
   }
 }

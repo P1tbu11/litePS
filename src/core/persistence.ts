@@ -1,9 +1,16 @@
 import { zip, unzip, strToU8, strFromU8 } from 'fflate';
-import { LIMITS, validateDocument, fail } from './model.ts';
+import { LIMITS, validateDocument, fail, isRaster, rasterLayers, walkLayers } from './model.ts';
 import type { Document, Asset } from './model.ts';
 import type { Assets } from './raster.ts';
 
-export const assetIds = (doc:Document) => new Set(doc.layers.flatMap(l=>l.assetId?[l.assetId]:[]));
+export const assetIds = (doc:Document) => {
+  const ids=new Set<string>();
+  walkLayers(doc.layers,layer=>{
+    if(isRaster(layer)&&layer.assetId)ids.add(layer.assetId);
+    if(layer.mask?.assetId)ids.add(layer.mask.assetId);
+  });
+  return ids;
+};
 export async function projectBlob(doc:Document, assets:Assets):Promise<Blob>{
   const entries:Record<string,Uint8Array>={};
   const list=await Promise.all(assets.values(assetIds(doc)).map(async a=>{const path=`assets/${a.id}`;entries[path]=new Uint8Array(await a.blob.arrayBuffer());return {id:a.id,path,type:a.blob.type,width:a.width,height:a.height};}));
@@ -26,7 +33,7 @@ export async function readProject(file:Blob, assets:Assets){
   try{
     for(const id of needed){const descriptions=manifest.assets.filter((a:{id?:string})=>a?.id===id);if(descriptions.length!==1)fail('工程素材清单缺失或重复');const a=descriptions[0];if(a.path!==`assets/${id}`||!entries[a.path])fail('工程素材缺失');
       const p=await assets.prepare(new Blob([entries[a.path] as Uint8Array<ArrayBuffer>],{type:a.type}),id);
-      if(doc.layers.some(l=>l.assetId===id&&(l.width!==p.asset.width||l.height!==p.asset.height))){p.bitmap.close();fail('图层尺寸与素材不一致');}prepared.push(p);
+      if(rasterLayers(doc.layers).some(l=>l.assetId===id&&(l.width!==p.asset.width||l.height!==p.asset.height))){p.bitmap.close();fail('图层尺寸与素材不一致');}prepared.push(p);
     }
     return {doc,prepared};
   }catch(e){for(const p of prepared)p.bitmap.close();throw e;}
