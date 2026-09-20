@@ -1,8 +1,11 @@
-import { Canvas, FabricImage, Rect, Point as FabricPoint } from 'fabric';
+import { Canvas, FabricImage, Rect, Point as FabricPoint, filters } from 'fabric';
 import type { Editor } from './core/editor.ts';
 import { corners, localPoint } from './core/model.ts';
 import type { Layer, Point, Stroke, Box } from './core/model.ts';
 import { context } from './core/raster.ts';
+
+const LIVE_ADJUST=new Set(['opacity','brightness','contrast','saturation']);
+function liveAdjust(patch:Partial<Layer>){return Object.keys(patch).length>0&&Object.keys(patch).every(k=>LIVE_ADJUST.has(k));}
 
 type Gesture = {kind:'pan';last:Point} | {kind:'box';start:Point} | {kind:'stroke';layer:Layer|null;stroke:Stroke;channel:'paint'|'mask'|'inpaint'};
 export class Viewport {
@@ -36,8 +39,25 @@ export class Viewport {
   private selectObject(object:unknown){const id=[...this.objects].find(([,o])=>o===object)?.[0]??null;if(id!==this.editor.selected)this.editor.select(id);}
   private scene(e:PointerEvent){const rect=this.host.getBoundingClientRect(),v=this.canvas.viewportTransform;return {x:(e.clientX-rect.left-v[4])/v[0],y:(e.clientY-rect.top-v[5])/v[3]};}
   private clamp(p:Point){return {x:Math.max(0,Math.min(this.editor.doc.width,p.x)),y:Math.max(0,Math.min(this.editor.doc.height,p.y))};}
+  private setAdjustFilters(obj:FabricImage,brightness:number,contrast:number,saturation:number){
+    if(!brightness&&!contrast&&!saturation){if(obj.filters.length){obj.filters=[];obj.applyFilters();}return;}
+    const existing=obj.filters;
+    if(existing[0] instanceof filters.Brightness&&existing[1] instanceof filters.Contrast&&existing[2] instanceof filters.Saturation){
+      existing[0].brightness=brightness;existing[1].contrast=contrast;existing[2].saturation=saturation;
+    }else obj.filters=[new filters.Brightness({brightness}),new filters.Contrast({contrast}),new filters.Saturation({saturation})];
+    obj.applyFilters();
+  }
+  private previewAdjust(id:string,patch:Partial<Layer>){
+    const layer=this.editor.doc.layers.find(l=>l.id===id),obj=this.objects.get(id);if(!layer||!obj)return;
+    const visual={...layer,...patch};
+    obj.set({opacity:visual.opacity});
+    this.setAdjustFilters(obj,visual.brightness-layer.brightness,visual.contrast-layer.contrast,visual.saturation-layer.saturation);
+  }
   sync(){
-    if(this.disposed||this.editor.store.busy)return;this.syncing=true;
+    const preview=this.editor.preview;
+    if(this.disposed)return;
+    if(preview&&liveAdjust(preview.patch)&&this.objects.has(preview.id)){this.previewAdjust(preview.id,preview.patch);this.canvas.requestRenderAll();return;}
+    if(this.editor.store.busy)return;this.syncing=true;
     const {doc,tool}=this.editor;this.canvas.skipTargetFind=tool!=='move';this.canvas.defaultCursor=tool==='hand'?'grab':tool==='move'?'default':'crosshair';
     const ids=new Set(doc.layers.map(l=>l.id));for(const [id,obj] of this.objects)if(!ids.has(id)){this.canvas.remove(obj);this.objects.delete(id);}
     doc.layers.forEach((original,index)=>{
@@ -45,6 +65,7 @@ export class Viewport {
       const image=this.editor.raster.layer(l);let obj=this.objects.get(l.id);
       if(!obj){obj=new FabricImage(image,{originX:'center',originY:'center',objectCaching:false,cornerColor:'#ffffff',cornerStrokeColor:'#4b8fff',borderColor:'#4b8fff',cornerSize:8,transparentCorners:false,cornerStyle:'circle',padding:0,strokeWidth:0,lockSkewingX:true,lockSkewingY:true,minScaleLimit:.001});this.objects.set(l.id,obj);this.canvas.add(obj);}
       else if(obj.getElement()!==image)obj.setElement(image);
+      this.setAdjustFilters(obj,0,0,0);
       obj.set({left:l.x,top:l.y,scaleX:l.scaleX,scaleY:l.scaleY,angle:l.rotation,flipX:l.flipX,flipY:l.flipY,visible:l.visible,opacity:l.opacity,globalCompositeOperation:l.blend,evented:!l.locked,selectable:!l.locked&&tool==='move'});obj.setCoords();this.canvas.moveObjectTo(obj,index);
     });
     this.canvas.clipPath=new Rect({left:0,top:0,width:doc.width,height:doc.height,originX:'left',originY:'top',absolutePositioned:true});
