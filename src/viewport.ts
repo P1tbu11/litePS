@@ -1,7 +1,7 @@
 import { Canvas, FabricImage, Rect, Point as FabricPoint, filters } from 'fabric';
 import type { Editor } from './core/editor.ts';
-import { ancestors, composeOntoRaster, corners, eachRaster, findNode, isRaster, localFromWorld, localPoint } from './core/model.ts';
-import type { GroupLayer, Layer, LayerPatch, Point, RasterLayer, Stroke, Box } from './core/model.ts';
+import { ancestors, composeOntoRaster, corners, eachRaster, findNode, isGroup, isRaster, localFromWorld, localPoint, needsDocumentComposite, patchLayer, setLayerMask } from './core/model.ts';
+import type { Document, GroupLayer, Layer, LayerPatch, Point, RasterLayer, Stroke, Box } from './core/model.ts';
 import { context } from './core/raster.ts';
 
 const LIVE_ADJUST=new Set(['opacity','brightness','contrast','saturation']);
@@ -16,7 +16,7 @@ function maskPaintColor(hex:string,erase:boolean,restore:boolean){
 export class Viewport {
   canvas:Canvas;
   private editor:Editor;private host:HTMLElement;private board:HTMLElement;private overlay:HTMLCanvasElement;
-  private objects=new Map<string,FabricImage>();private gesture:Gesture|null=null;private space=false;private syncing=false;private frame=0;private disposed=false;
+  private objects=new Map<string,FabricImage>();private sheet:FabricImage|null=null;private gesture:Gesture|null=null;private space=false;private syncing=false;private frame=0;private disposed=false;
   private hover:Point|null=null;
   private observer:ResizeObserver;private unsubscribe:()=>void;private cleanup:(()=>void)[]=[];
   constructor(host:HTMLElement,element:HTMLCanvasElement,board:HTMLElement,overlay:HTMLCanvasElement,editor:Editor){
@@ -58,26 +58,47 @@ export class Viewport {
     obj.set({opacity:visual.opacity});
     this.setAdjustFilters(obj,visual.brightness-layer.brightness,visual.contrast-layer.contrast,visual.saturation-layer.saturation);
   }
+  private displayDoc(){
+    let doc=this.editor.doc;
+    const preview=this.editor.preview;
+    if(preview&&findNode(doc,preview.id))doc=patchLayer(doc,preview.id,preview.patch);
+    const g=this.gesture;
+    if(g?.kind==='stroke'){
+      if(g.channel==='paint'&&isRaster(g.layer))doc=patchLayer(doc,g.layer.id,{strokes:[...g.layer.strokes,g.stroke]});
+      else if(g.channel==='mask'&&g.layer.mask)doc=setLayerMask(doc,g.layer.id,{...g.layer.mask,strokes:[...g.layer.mask.strokes,g.stroke]});
+    }
+    return doc;
+  }
+  private blit(doc:Document){
+    const active=this.editor.active;
+    const image=this.editor.viewMask&&this.editor.editingMask&&active?.mask
+      ?this.editor.raster.maskImage(active.mask,isRaster(active)?active.width:doc.width,isRaster(active)?active.height:doc.height)
+      :this.editor.raster.composite(doc);
+    if(!this.sheet){this.sheet=new FabricImage(image,{originX:'left',originY:'top',left:0,top:0,selectable:false,evented:false,objectCaching:false});this.canvas.add(this.sheet);}
+    else this.sheet.setElement(image);
+    this.sheet.set({left:0,top:0,visible:true});this.sheet.setCoords();this.canvas.sendObjectToBack(this.sheet);
+  }
   sync(){
     const preview=this.editor.preview;
     if(this.disposed)return;
-    if(preview&&liveAdjust(preview.patch)&&this.objects.has(preview.id)){this.previewAdjust(preview.id,preview.patch);this.canvas.requestRenderAll();return;}
+    if(preview&&liveAdjust(preview.patch)&&this.objects.has(preview.id)&&!needsDocumentComposite(this.editor.doc.layers)){this.previewAdjust(preview.id,preview.patch);this.canvas.requestRenderAll();return;}
     if(this.editor.store.busy)return;this.syncing=true;
-    const {doc,tool}=this.editor;this.canvas.skipTargetFind=tool!=='move';this.canvas.defaultCursor=tool==='hand'?'grab':tool==='move'?'default':'crosshair';
+    const doc=this.displayDoc(),{tool}=this.editor,compose=needsDocumentComposite(doc.layers)||(this.editor.editingMask&&!!this.editor.active&&isGroup(this.editor.active));
+    this.canvas.skipTargetFind=tool!=='move'||compose;this.canvas.defaultCursor=tool==='hand'?'grab':tool==='move'?'default':'crosshair';
     const rasters:RasterLayer[]=[];const stacked:GroupLayer[][]=[];
     eachRaster(doc.layers,(original,groups)=>{rasters.push(original);stacked.push(groups);});
     const ids=new Set(rasters.map(l=>l.id));for(const [id,obj] of this.objects)if(!ids.has(id)){this.canvas.remove(obj);this.objects.delete(id);}
     rasters.forEach((original,index)=>{
-      const groups=stacked[index].map(g=>this.editor.preview?.id===g.id?{...g,...this.editor.preview.patch} as GroupLayer:g);
-      const visual=this.editor.preview?.id===original.id?{...original,...this.editor.preview.patch} as RasterLayer:original;
-      const l=composeOntoRaster(visual,groups);
-      const image=this.editor.viewMask&&this.editor.editingMask&&original.mask?this.editor.raster.maskImage(original.mask,original.width,original.height):this.editor.raster.layer(visual);let obj=this.objects.get(l.id);
+      const groups=stacked[index];
+      const l=composeOntoRaster(original,groups);
+      const image=this.editor.viewMask&&this.editor.editingMask&&original.mask?this.editor.raster.maskImage(original.mask,original.width,original.height):this.editor.raster.layer(original);let obj=this.objects.get(l.id);
       if(!obj){obj=new FabricImage(image,{originX:'center',originY:'center',objectCaching:false,cornerColor:'#ffffff',cornerStrokeColor:'#4b8fff',borderColor:'#4b8fff',cornerSize:8,transparentCorners:false,cornerStyle:'circle',padding:0,strokeWidth:0,lockSkewingX:true,lockSkewingY:true,minScaleLimit:.001});this.objects.set(l.id,obj);this.canvas.add(obj);}
-      else if(obj.getElement()!==image)obj.setElement(image);
+      else if(!compose&&obj.getElement()!==image)obj.setElement(image);
       this.setAdjustFilters(obj,0,0,0);
-      const locked=visual.locked||groups.some(g=>g.locked);
-      obj.set({left:l.x,top:l.y,scaleX:l.scaleX,scaleY:l.scaleY,angle:l.rotation,flipX:l.flipX,flipY:l.flipY,visible:visual.visible&&groups.every(g=>g.visible),opacity:groups.reduce((n,g)=>n*g.opacity,visual.opacity),globalCompositeOperation:visual.blend,evented:!locked,selectable:!locked&&tool==='move'});obj.setCoords();this.canvas.moveObjectTo(obj,index);
+      const locked=original.locked||groups.some(g=>g.locked);
+      obj.set({left:l.x,top:l.y,scaleX:l.scaleX,scaleY:l.scaleY,angle:l.rotation,flipX:l.flipX,flipY:l.flipY,visible:!compose&&original.visible&&groups.every(g=>g.visible),opacity:groups.reduce((n,g)=>n*g.opacity,original.opacity),globalCompositeOperation:original.blend,evented:!compose&&!locked,selectable:!compose&&!locked&&tool==='move'});obj.setCoords();this.canvas.moveObjectTo(obj,index);
     });
+    if(compose)this.blit(doc);else if(this.sheet)this.sheet.visible=false;
     this.canvas.clipPath=new Rect({left:0,top:0,width:doc.width,height:doc.height,originX:'left',originY:'top',absolutePositioned:true});
     const active=this.editor.selected?this.objects.get(this.editor.selected):undefined;
     if(active&&active.selectable&&active.visible){if(this.canvas.getActiveObject()!==active)this.canvas.setActiveObject(active);}else this.canvas.discardActiveObject();
@@ -115,7 +136,7 @@ export class Viewport {
     else if(g.kind==='box'){const p=this.clamp(this.scene(e));this.editor.selection={x:Math.min(g.start.x,p.x),y:Math.min(g.start.y,p.y),width:Math.abs(p.x-g.start.x),height:Math.abs(p.y-g.start.y)};this.editor.emit();this.drawOverlay();}
     else{const p=this.scene(e),world=isRaster(g.layer)?composeOntoRaster(g.layer,ancestors(this.editor.doc,g.layer.id)):null,point=world?localPoint(p,world):p,last=g.stroke.points.at(-1)!;if(Math.hypot(point.x-last.x,point.y-last.y)>.5)g.stroke.points.push(point);if(g.stroke.points.length>12000){this.up(e);return;}this.preview();}
   };
-  private preview(){if(this.frame)return;this.frame=requestAnimationFrame(()=>{this.frame=0;const g=this.gesture;if(g?.kind==='stroke'&&isRaster(g.layer)){const next=g.channel==='mask'&&g.layer.mask?{...g.layer,mask:{...g.layer.mask,strokes:[...g.layer.mask.strokes,g.stroke]}}:{...g.layer,strokes:[...g.layer.strokes,g.stroke]};this.objects.get(g.layer.id)?.setElement(this.editor.raster.layer(next));this.canvas.requestRenderAll();}this.drawOverlay();});}
+  private preview(){if(this.frame)return;this.frame=requestAnimationFrame(()=>{this.frame=0;const g=this.gesture;if(g?.kind==='stroke'){const doc=this.displayDoc();if(needsDocumentComposite(doc.layers)||isGroup(g.layer))this.blit(doc);else if(isRaster(g.layer)){const next=g.channel==='mask'&&g.layer.mask?{...g.layer,mask:{...g.layer.mask,strokes:[...g.layer.mask.strokes,g.stroke]}}:{...g.layer,strokes:[...g.layer.strokes,g.stroke]};this.objects.get(g.layer.id)?.setElement(this.editor.raster.layer(next));}this.canvas.requestRenderAll();}this.drawOverlay();});}
   private up=(e:PointerEvent)=>{const g=this.gesture;if(!g)return;e.preventDefault();e.stopPropagation();if(this.host.hasPointerCapture(e.pointerId))this.host.releasePointerCapture(e.pointerId);this.gesture=null;this.editor.store.busy=false;
     if(g.kind==='stroke'){try{this.editor.execute([{type:'stroke',id:g.layer?.id,channel:g.channel,stroke:g.stroke}],g.channel==='mask'?'修改图层蒙版':'画笔');}catch(err){this.editor.error(err);}}
     else if(g.kind==='box'&&this.editor.selection&&(this.editor.selection.width<1||this.editor.selection.height<1))this.editor.selection=null;

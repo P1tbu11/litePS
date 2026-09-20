@@ -1,5 +1,5 @@
 import { Assets, Rasterizer, context, surface, toBlob } from '../src/core/raster.ts';
-import { createDocument, createLayer } from '../src/core/model.ts';
+import { createDocument, createGroup, createLayer } from '../src/core/model.ts';
 import { projectBlob, readProject } from '../src/core/persistence.ts';
 export async function runRasterTests(){
   const results:string[]=[];
@@ -17,7 +17,14 @@ export async function runRasterTests(){
   layer.mask.strokes.push({...layer.mask.strokes[0],mode:'restore'});
   check(pixel(raster.composite(doc))[3]===255,'restoring mask recovers original pixels');
   const blue=surface(8,8);context(blue).fillStyle='#0000ff';context(blue).fillRect(0,0,8,8);
-  const p2=await assets.prepare(await toBlob(blue));assets.accept([p2]);const l2=createLayer(doc,8,8,p2.asset.id,'blue');l2.blend='multiply';doc.layers.push(l2);
+  const p2=await assets.prepare(await toBlob(blue));assets.accept([p2]);
+  const below=createLayer(doc,8,8,prepared.asset.id,'below');
+  const child=createLayer(doc,8,8,p2.asset.id,'child');
+  const group=createGroup('组',[child]);
+  group.mask={assetId:null,disabled:false,strokes:[{points:[{x:2.5,y:2.5}],radius:2,hardness:1,opacity:1,color:'#000000',mode:'paint'}]};
+  doc.layers=[below,group];
+  check(pixel(raster.composite(doc)).join(',')==='255,0,0,255','pass-through group mask reveals the layer below');
+  const l2=createLayer(doc,8,8,p2.asset.id,'blue');l2.blend='multiply';doc.layers=[layer,l2];
   check(pixel(raster.composite(doc)).join(',')==='0,0,0,255','multiply works across independent layers');
   doc.inpaint=[{points:[{x:4,y:4}],radius:3,hardness:0,opacity:1,color:'#ffffff',mode:'paint'}];
   const mask=context(raster.mask(doc)).getImageData(0,0,8,8).data;

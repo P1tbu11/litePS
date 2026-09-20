@@ -46,6 +46,12 @@ export function createLayer(doc: Document, width: number, height: number, assetI
 export function createMask(): LayerMask { return { assetId: null, disabled: false, strokes: [] }; }
 export function hasMask(layer: Layer) { return layer.mask !== null; }
 export function maskEnabled(layer: Layer) { return !!layer.mask && !layer.mask.disabled; }
+export function needsDocumentComposite(nodes: Layer[]): boolean {
+  for (const node of nodes) {
+    if (isGroup(node) && (maskEnabled(node) || node.opacity < 1 || isIsolatedGroup(node) || needsDocumentComposite(node.children))) return true;
+  }
+  return false;
+}
 export function createGroup(name = '组', children: Layer[] = []): GroupLayer {
   return { type: 'group', id: crypto.randomUUID(), name, children, x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0, flipX: false, flipY: false, visible: true, locked: false, opacity: 1, blend: GROUP_BLEND, mask: null };
 }

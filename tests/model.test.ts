@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composeOntoRaster, createDocument, createLayer, createGroup, cropDocument, findNode, isGroup, isIdentityGroup, isIsolatedGroup, isRaster, localFromWorld, localPoint, worldPoint, nodeCount, patchLayer, validateDocument } from '../src/core/model.ts';
+import { composeOntoRaster, createDocument, createLayer, createGroup, cropDocument, findNode, isGroup, isIdentityGroup, isIsolatedGroup, isRaster, localFromWorld, localPoint, needsDocumentComposite, worldPoint, nodeCount, patchLayer, validateDocument } from '../src/core/model.ts';
 import type { Document } from '../src/core/model.ts';
 import { applyOperation } from '../src/core/editor.ts';
 import { EditorStore } from '../src/core/store.ts';
@@ -172,6 +172,14 @@ test('add, disable and remove layer masks on rasters and groups', () => {
   doc={...d,layers:[group]};
   doc=applyOperation(doc,{type:'layer.mask.add',id:group.id});
   assert.ok(doc.layers[0].mask);
+});
+test('a pass-through group mask requires the full document composite', () => {
+  const d=createDocument();
+  const child=createLayer(d,20,20,null,'子层');
+  const group=createGroup('组',[child]);
+  assert.equal(needsDocumentComposite([group]),false);
+  group.mask={assetId:null,disabled:false,strokes:[]};
+  assert.equal(needsDocumentComposite([group]),true);
 });
 test('painting a mask requires an existing layer mask', () => {
   const d=createDocument();

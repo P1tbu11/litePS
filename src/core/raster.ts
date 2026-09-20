@@ -106,7 +106,7 @@ export class Rasterizer {
     const m=mask&&!mask.disabled?context(this.maskImage(mask,width,height)).getImageData(0,0,width,height).data:null;
     const out=ctx.createImageData(width,height),p=out.data;
     for(let i=0;i<p.length;i+=4){
-      const a=opacity*(m?m[i]/255:1);
+      const a=opacity*(m?(.2126*m[i]+.7152*m[i+1]+.0722*m[i+2])/255:1);
       p[i]=b[i]*(1-a)+c[i]*a;p[i+1]=b[i+1]*(1-a)+c[i+1]*a;p[i+2]=b[i+2]*(1-a)+c[i+2]*a;p[i+3]=b[i+3]*(1-a)+c[i+3]*a;
     }
     ctx.putImageData(out,0,0);
