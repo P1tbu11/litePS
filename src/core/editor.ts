@@ -47,7 +47,7 @@ export function applyOperation(doc:Document,op:Operation):Document{
 export class Editor {
   store=new EditorStore();assets=new Assets();raster=new Rasterizer(this.assets);
   tool:Tool='move';selected:string|null=null;selection:Box|null=null;editingMask=false;viewMask=false;
-  brush={radius:24,hardness:.75,opacity:1,color:'#ffffff',restore:false};
+  brush={radius:24,hardness:.75,opacity:1,color:'#ffffff',background:'#000000',restore:false};
   preview: {id:string;patch:LayerPatch}|null=null;
   hostRequest:HostRequest|null=null;hostConnection:HostConnection|null=null;
   busy=false;ready=false;saveState:'loading'|'saving'|'saved'|'error'|'disabled'='loading';
@@ -117,7 +117,9 @@ export class Editor {
   async downloadImage(type='image/png',mask=false){const r=await this.exportImage(type,mask);download(r.file,`${r.name}${mask?'-mask':''}.${type==='image/jpeg'?'jpg':type.split('/')[1]}`);this.toast(mask?'黑白遮罩已导出':'图片已导出');}
   async copyImage(){const {file}=await this.exportImage();if(!navigator.clipboard?.write)fail('浏览器不支持复制图片，请使用导出');await navigator.clipboard.write([new ClipboardItem({'image/png':file})]);this.toast('图片已复制');}
   addBlank(){this.execute([{type:'layer.blank'}],'添加空白图层');this.selected=this.doc.layers.at(-1)!.id;this.editingMask=false;this.emit();}
-  addMask(){if(!this.selected)fail('请先选中图层');this.execute([{type:'layer.mask.add',id:this.selected}],'添加图层蒙版');this.editingMask=true;this.tool='brush';this.brush.color='#000000';this.emit();}
+  addMask(){if(!this.selected)fail('请先选中图层');this.execute([{type:'layer.mask.add',id:this.selected}],'添加图层蒙版');this.editingMask=true;this.tool='brush';this.brush.color='#000000';this.brush.background='#ffffff';this.emit();}
+  swapColors(){const color=this.brush.color;this.brush.color=this.brush.background;this.brush.background=color;this.emit();}
+  resetColors(){this.brush.color='#000000';this.brush.background='#ffffff';this.emit();}
   removeMask(){if(!this.selected)return;this.execute([{type:'layer.mask.remove',id:this.selected}],'删除图层蒙版');this.editingMask=false;this.viewMask=false;this.emit();}
   disableMask(disabled:boolean){if(!this.selected)return;this.execute([{type:'layer.mask.disable',id:this.selected,disabled}],disabled?'停用图层蒙版':'启用图层蒙版');}
   group(){this.execute([{type:'layer.group',ids:this.selected?[this.selected]:[]}],this.selected?'编组':'新建组');}

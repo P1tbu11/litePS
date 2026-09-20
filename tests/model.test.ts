@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { composeOntoRaster, createDocument, createLayer, createGroup, cropDocument, findNode, isGroup, isIdentityGroup, isIsolatedGroup, isRaster, localFromWorld, localPoint, needsDocumentComposite, worldPoint, nodeCount, patchLayer, validateDocument } from '../src/core/model.ts';
 import type { Document } from '../src/core/model.ts';
-import { applyOperation } from '../src/core/editor.ts';
+import { applyOperation, Editor } from '../src/core/editor.ts';
 import { EditorStore } from '../src/core/store.ts';
 
 test('rotated and flipped layer coordinates round trip', () => {
@@ -187,4 +187,32 @@ test('painting a mask requires an existing layer mask', () => {
   const doc:Document={...d,layers:[layer]};
   const stroke={points:[{x:1,y:1}],radius:4,hardness:1,opacity:1,color:'#000000',mode:'paint' as const};
   assert.throws(()=>applyOperation(doc,{type:'stroke',id:layer.id,channel:'mask',stroke}),/蒙版/);
+});
+test('X swaps foreground and background colors', () => {
+  const e=new Editor();
+  e.brush.color='#112233';
+  e.brush.background='#aabbcc';
+  e.swapColors();
+  assert.equal(e.brush.color,'#aabbcc');
+  assert.equal(e.brush.background,'#112233');
+});
+test('D restores default black and white colors', () => {
+  const e=new Editor();
+  e.brush.color='#112233';
+  e.brush.background='#aabbcc';
+  e.resetColors();
+  assert.equal(e.brush.color,'#000000');
+  assert.equal(e.brush.background,'#ffffff');
+});
+test('adding a layer mask sets default black and white colors', () => {
+  const e=new Editor();
+  e.ready=true;
+  const layer=createLayer(e.doc,20,20,null,'A');
+  e.store.replace({...e.doc,layers:[layer]});
+  e.selected=layer.id;
+  e.brush.color='#ff0000';
+  e.brush.background='#00ff00';
+  e.addMask();
+  assert.equal(e.brush.color,'#000000');
+  assert.equal(e.brush.background,'#ffffff');
 });
