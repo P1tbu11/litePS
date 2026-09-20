@@ -1,4 +1,4 @@
-import { LIMITS, dimensions, fail, isIsolatedGroup, isRaster, maskEnabled, rasterLayers } from './model.ts';
+import { LIMITS, ancestors, composeOntoRaster, dimensions, fail, isIsolatedGroup, isRaster, maskEnabled, rasterLayers } from './model.ts';
 import type { Asset, Document, GroupLayer, Layer, LayerMask, RasterLayer, Stroke } from './model.ts';
 
 export function surface(width: number, height: number) { const c = document.createElement('canvas'); c.width = width; c.height = height; return c; }
@@ -28,7 +28,8 @@ export class Assets {
 export function drawStroke(ctx: CanvasRenderingContext2D, s: Stroke, channel: 'paint' | 'mask' | 'inpaint' = 'paint') {
   if (!s.points.length) return;
   ctx.save();
-  if (s.clip?.length) { ctx.beginPath(); s.clip.forEach((p,i)=> i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y)); ctx.closePath(); ctx.clip(); }
+  if (s.spans?.length) { ctx.beginPath(); for (const span of s.spans) ctx.rect(span.x0,span.y,Math.max(0,span.x1-span.x0),1); ctx.clip(); }
+  else if (s.clip?.length) { ctx.beginPath(); s.clip.forEach((p,i)=> i ? ctx.lineTo(p.x,p.y) : ctx.moveTo(p.x,p.y)); ctx.closePath(); ctx.clip(); }
   ctx.globalCompositeOperation = s.mode === 'erase' ? 'destination-out' : 'source-over';
   ctx.globalAlpha = s.opacity;
   const color=channel==='inpaint' ? '#ffffff' : s.color;
@@ -88,6 +89,11 @@ export class Rasterizer {
     if(background){ctx.fillStyle=background;ctx.fillRect(0,0,c.width,c.height);}
     this.drawNodes(doc.layers,ctx,doc.width,doc.height);
     return c;
+  }
+  sample(doc:Document,layer:RasterLayer){
+    const c=surface(doc.width,doc.height);
+    this.drawRaster(composeOntoRaster(layer,ancestors(doc,layer.id)),context(c));
+    return context(c).getImageData(0,0,doc.width,doc.height);
   }
   private drawRaster(l:RasterLayer,ctx:CanvasRenderingContext2D){
     ctx.save();

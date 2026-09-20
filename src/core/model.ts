@@ -5,7 +5,8 @@ export type Blend = typeof BLENDS[number];
 export type GroupBlend = Blend | typeof GROUP_BLEND;
 export type Point = { x: number; y: number };
 export type Box = Point & { width: number; height: number };
-export type Stroke = { points: Point[]; radius: number; hardness: number; opacity: number; color: string; mode: 'paint' | 'erase' | 'restore'; clip?: Point[] };
+export type Span = { y: number; x0: number; x1: number };
+export type Stroke = { points: Point[]; radius: number; hardness: number; opacity: number; color: string; mode: 'paint' | 'erase' | 'restore'; clip?: Point[]; spans?: Span[] };
 export type LayerMask = { assetId: string | null; disabled: boolean; strokes: Stroke[] };
 export type RasterLayer = {
   type: 'raster';
@@ -25,7 +26,7 @@ export type GroupLayer = {
 export type Layer = RasterLayer | GroupLayer;
 export type LayerPatch = Partial<Pick<RasterLayer, 'name' | 'x' | 'y' | 'scaleX' | 'scaleY' | 'rotation' | 'flipX' | 'flipY' | 'visible' | 'locked' | 'opacity' | 'brightness' | 'contrast' | 'saturation' | 'strokes'>> & { blend?: GroupBlend; children?: Layer[] };
 export type Document = { schemaVersion: 1; id: string; name: string; width: number; height: number; layers: Layer[]; inpaint: Stroke[] };
-export type Tool = 'move' | 'hand' | 'select' | 'crop' | 'brush' | 'erase' | 'eyedropper';
+export type Tool = 'move' | 'hand' | 'select' | 'lasso' | 'crop' | 'brush' | 'erase' | 'eyedropper' | 'wand' | 'fill';
 export type Asset = { id: string; blob: Blob; width: number; height: number };
 export class EditorError extends Error { code: string; constructor(code: string, message: string) { super(message); this.code = code; } }
 export function fail(message: string, code = 'INVALID_INPUT'): never { throw new EditorError(code, message); }
@@ -238,6 +239,33 @@ export function setLayerMask(doc: Document, id: string, mask: LayerMask | null):
   editable(doc, id);
   return { ...doc, layers: mapNodes(doc.layers, id, layer => ({ ...layer, mask })) };
 }
+export function bakeRaster(doc: Document, id: string, assetId: string, width: number, height: number): Document {
+  requireRaster(editable(doc, id));
+  dimensions(width, height);
+  return { ...doc, layers: mapNodes(doc.layers, id, layer => isRaster(layer) ? { ...layer, assetId, width, height, strokes: [], brightness: 0, contrast: 0, saturation: 0 } : layer) };
+}
+export function mergeDown(doc: Document, id: string, baked: { assetId: string; width: number; height: number; x: number; y: number }): Document {
+  const loc = locateNode(doc, id);
+  editable(doc, id);
+  if (loc.index === 0) fail('没有可向下合并的图层');
+  const below = loc.siblings[loc.index - 1];
+  if (below.locked) fail('请先解锁图层', 'LAYER_LOCKED');
+  const raster: RasterLayer = {
+    type: 'raster', id: below.id, name: below.name, assetId: baked.assetId, width: baked.width, height: baked.height,
+    x: baked.x, y: baked.y, scaleX: 1, scaleY: 1, rotation: 0, flipX: false, flipY: false,
+    visible: true, locked: false, opacity: 1, blend: 'source-over',
+    brightness: 0, contrast: 0, saturation: 0, strokes: [], mask: null,
+  };
+  const siblings = loc.siblings.filter(node => node.id !== id);
+  siblings[siblings.findIndex(node => node.id === below.id)] = raster;
+  return replaceSiblings(doc, loc.parent?.id ?? null, siblings);
+}
+export function flattenDocument(doc: Document, baked: { assetId: string; width: number; height: number }): Document {
+  const layer = createLayer(doc, baked.width, baked.height, baked.assetId, '拼合');
+  layer.scaleX = 1;
+  layer.scaleY = 1;
+  return { ...doc, layers: [layer] };
+}
 export function cropDocument(doc: Document, box: Box): Document {
   const x = Math.max(0, Math.floor(box.x)), y = Math.max(0, Math.floor(box.y));
   const width = Math.min(doc.width - x, Math.round(box.width));
@@ -271,7 +299,12 @@ export function validateDocument(value: unknown): Document {
       if (!Array.isArray(s.points) || !s.points.length || !['paint','erase','restore'].includes(s.mode as string) || typeof s.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(s.color)) fail('笔画数据无效');
       let clip: Point[] | undefined;
       if (s.clip !== undefined) { if (!Array.isArray(s.clip) || s.clip.length !== 4) fail('选区数据无效'); clip = s.clip.map(point); }
-      return { points: s.points.map(point), radius: num(s.radius,.01,20_000), hardness: num(s.hardness,0,1), opacity: num(s.opacity,0,1), color: s.color, mode: s.mode as Stroke['mode'], ...(clip ? {clip} : {}) };
+      let spans: Span[] | undefined;
+      if (s.spans !== undefined) {
+        if (!Array.isArray(s.spans) || s.spans.length > LIMITS.points) fail('选区数据无效');
+        spans = s.spans.map(v => { const span = object(v); return { y: num(span.y,-1e6,1e6), x0: num(span.x0,-1e6,1e6), x1: num(span.x1,-1e6,1e6) }; });
+      }
+      return { points: s.points.map(point), radius: num(s.radius,.01,20_000), hardness: num(s.hardness,0,1), opacity: num(s.opacity,0,1), color: s.color, mode: s.mode as Stroke['mode'], ...(clip ? {clip} : {}), ...(spans ? {spans} : {}) };
     });
   };
   const parseMask = (value: unknown): LayerMask | null => {

@@ -204,6 +204,31 @@ test('D restores default black and white colors', () => {
   assert.equal(e.brush.color,'#000000');
   assert.equal(e.brush.background,'#ffffff');
 });
+test('merge down replaces the layer below and removes the current layer', () => {
+  const d=createDocument(8,8);
+  const below=createLayer(d,8,8,null,'below');
+  const above=createLayer(d,8,8,null,'above');
+  let doc:Document={...d,layers:[below,above]};
+  doc=applyOperation(doc,{type:'layer.mergeDown',id:above.id,assetId:'merged',width:8,height:8,x:4,y:4});
+  assert.equal(doc.layers.length,1);
+  assert.equal(doc.layers[0].id,below.id);
+  assert.ok(isRaster(doc.layers[0]));
+  if(isRaster(doc.layers[0])){
+    assert.equal(doc.layers[0].assetId,'merged');
+    assert.equal(doc.layers[0].name,'below');
+    assert.deepEqual(doc.layers[0].strokes,[]);
+  }
+});
+test('flatten visible keeps one raster and drops hidden layers', () => {
+  const d=createDocument(8,8);
+  const hidden=createLayer(d,8,8,null,'hidden');hidden.visible=false;
+  const shown=createLayer(d,8,8,null,'shown');
+  let doc:Document={...d,layers:[hidden,shown]};
+  doc=applyOperation(doc,{type:'document.flatten',visibleOnly:true,assetId:'flat',width:8,height:8});
+  assert.equal(doc.layers.length,1);
+  assert.ok(isRaster(doc.layers[0]));
+  if(isRaster(doc.layers[0]))assert.equal(doc.layers[0].assetId,'flat');
+});
 test('adding a layer mask sets default black and white colors', () => {
   const e=new Editor();
   e.ready=true;

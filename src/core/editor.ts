@@ -1,8 +1,11 @@
 import { EditorStore } from './store.ts';
 import { Assets, Rasterizer, context, surface, toBlob } from './raster.ts';
 import { assetIds, download, loadRecovery, projectBlob, readProject, saveRecovery } from './persistence.ts';
-import { cloneNode, createDocument, createLayer, createMask, cropDocument, editable, EditorError, fail, findNode, groupNodes, isGroup, LIMITS, locateNode, moveNode, nodeCount, nodeSize, patchLayer, rasterLayers, removeNode, replaceSiblings, requireRaster, setLayerMask, ungroupNode, validateDocument, walkLayers } from './model.ts';
-import type { Box, Document, LayerPatch, RasterLayer, Stroke, Tool } from './model.ts';
+import { ancestors, bakeRaster, cloneNode, composeOntoRaster, createDocument, createLayer, createMask, cropDocument, editable, EditorError, fail, findNode, flattenDocument, groupNodes, isGroup, isRaster, LIMITS, localPoint, locateNode, mergeDown, moveNode, nodeCount, nodeSize, patchLayer, rasterLayers, removeNode, replaceSiblings, requireRaster, setLayerMask, ungroupNode, validateDocument, walkLayers } from './model.ts';
+import type { Box, Document, LayerPatch, Point, RasterLayer, Stroke, Tool } from './model.ts';
+import { combineSelections, invertSelection, selectionBounds, selectionFromMask, selectionFromPolygon, selectionFromRect, selectionIsEmpty, selectionOnLayer } from './selection.ts';
+import type { Combine, Selection } from './selection.ts';
+import { andMasks, applyMaskColor, floodMask, parseHex } from './pixels.ts';
 import type { HostConnection, HostRequest } from '../bridge.ts';
 
 export type Operation =
@@ -11,9 +14,13 @@ export type Operation =
   | {type:'layer.reorder';id:string;index:number;parentId?:string|null}
   | {type:'layer.group';ids?:string[]}
   | {type:'layer.blank';name?:string}
-  | {type:'layer.mask.add'|'layer.mask.remove';id:string}
+  | {type:'layer.mask.add';id:string;assetId?:string|null}
+  | {type:'layer.mask.remove';id:string}
   | {type:'layer.mask.disable';id:string;disabled:boolean}
   | {type:'stroke';id?:string;channel:'paint'|'mask'|'inpaint';stroke:Stroke}
+  | {type:'layer.bake';id:string;assetId:string;width:number;height:number}
+  | {type:'layer.mergeDown';id:string;assetId:string;width:number;height:number;x:number;y:number}
+  | {type:'document.flatten';visibleOnly?:boolean;assetId:string;width:number;height:number}
   | {type:'mask.clear'} | {type:'document.crop';box:Box} | {type:'document.rename';name:string};
 const properties=new Set(['name','x','y','scaleX','scaleY','rotation','flipX','flipY','visible','locked','opacity','blend','brightness','contrast','saturation']);
 export function applyOperation(doc:Document,op:Operation):Document{
@@ -26,7 +33,10 @@ export function applyOperation(doc:Document,op:Operation):Document{
     case 'layer.group': return groupNodes(doc,op.ids??[]);
     case 'layer.ungroup': editable(doc,op.id);return ungroupNode(doc,op.id);
     case 'layer.blank':return {...doc,layers:[...doc.layers,createLayer(doc,doc.width,doc.height,null,op.name??'空白图层')]};
-    case 'layer.mask.add': {const layer=editable(doc,op.id);if(layer.mask)fail('图层已有蒙版');return setLayerMask(doc,op.id,createMask());}
+    case 'layer.mask.add': {const layer=editable(doc,op.id);if(layer.mask)fail('图层已有蒙版');return setLayerMask(doc,op.id,{...createMask(),assetId:op.assetId??null});}
+    case 'layer.bake': return bakeRaster(doc,op.id,op.assetId,op.width,op.height);
+    case 'layer.mergeDown': return mergeDown(doc,op.id,{assetId:op.assetId,width:op.width,height:op.height,x:op.x,y:op.y});
+    case 'document.flatten': return flattenDocument(doc,{assetId:op.assetId,width:op.width,height:op.height});
     case 'layer.mask.remove': {editable(doc,op.id);return setLayerMask(doc,op.id,null);}
     case 'layer.mask.disable': {const layer=editable(doc,op.id);if(!layer.mask)fail('请先添加图层蒙版');return setLayerMask(doc,op.id,{...layer.mask,disabled:op.disabled});}
     case 'stroke':{
@@ -46,8 +56,9 @@ export function applyOperation(doc:Document,op:Operation):Document{
 
 export class Editor {
   store=new EditorStore();assets=new Assets();raster=new Rasterizer(this.assets);
-  tool:Tool='move';selected:string|null=null;selection:Box|null=null;editingMask=false;viewMask=false;
+  tool:Tool='move';selected:string|null=null;selection:Selection|null=null;editingMask=false;viewMask=false;
   brush={radius:24,hardness:.75,opacity:1,color:'#ffffff',background:'#000000',restore:false};
+  selectOpts={tolerance:32,contiguous:true};
   preview: {id:string;patch:LayerPatch}|null=null;
   hostRequest:HostRequest|null=null;hostConnection:HostConnection|null=null;
   busy=false;ready=false;saveState:'loading'|'saving'|'saved'|'error'|'disabled'='loading';
@@ -88,7 +99,12 @@ export class Editor {
   }
   select(id:string|null,editMask=false){this.selected=id;this.editingMask=!!id&&editMask&&!!findNode(this.doc,id)?.mask;if(!this.editingMask)this.viewMask=false;this.emit();}
   setTool(tool:Tool){if(this.busy||this.store.busy)return;this.tool=tool;this.emit();}
-  setSelection(box:Box|null){this.selection=box;this.emit();}
+  setSelection(value:Selection|Box|null){
+    this.selection=value&&'data' in value?value:value?selectionFromRect(this.doc.width,this.doc.height,value):null;
+    if(this.selection&&selectionIsEmpty(this.selection))this.selection=null;
+    this.emit();
+  }
+  invertSel(){if(this.selection)this.setSelection(invertSelection(this.selection));}
   execute(operations:Operation[],label='编辑',expectedRevision?:number){this.checkIdle();if(!Array.isArray(operations)||!operations.length||operations.length>100)fail('操作数量无效');const ids=new Set<string>();walkLayers(this.doc.layers,layer=>ids.add(layer.id));this.store.commit(label,d=>operations.reduce(applyOperation,d),expectedRevision);let created:string|undefined;walkLayers(this.doc.layers,layer=>{if(!ids.has(layer.id))created=layer.id;});if(created){this.selected=created;this.emit();}}
   patch(patch:LayerPatch){if(!this.selected)return;this.execute([{type:'layer.patch',id:this.selected,patch}],'修改图层');}
   previewPatch(patch:LayerPatch){if(!this.active||this.active.locked)return;this.preview={id:this.active.id,patch};this.emit();}
@@ -117,7 +133,19 @@ export class Editor {
   async downloadImage(type='image/png',mask=false){const r=await this.exportImage(type,mask);download(r.file,`${r.name}${mask?'-mask':''}.${type==='image/jpeg'?'jpg':type.split('/')[1]}`);this.toast(mask?'黑白遮罩已导出':'图片已导出');}
   async copyImage(){const {file}=await this.exportImage();if(!navigator.clipboard?.write)fail('浏览器不支持复制图片，请使用导出');await navigator.clipboard.write([new ClipboardItem({'image/png':file})]);this.toast('图片已复制');}
   addBlank(){this.execute([{type:'layer.blank'}],'添加空白图层');this.selected=this.doc.layers.at(-1)!.id;this.editingMask=false;this.emit();}
-  addMask(){if(!this.selected)fail('请先选中图层');this.execute([{type:'layer.mask.add',id:this.selected}],'添加图层蒙版');this.editingMask=true;this.tool='brush';this.brush.color='#000000';this.brush.background='#ffffff';this.emit();}
+  async addMask(){
+    if(!this.selected)fail('请先选中图层');
+    let assetId:string|null=null;
+    if(this.selection){
+      const layer=findNode(this.doc,this.selected);if(!layer)fail('请先选中图层');
+      const width=isRaster(layer)?layer.width:this.doc.width,height=isRaster(layer)?layer.height:this.doc.height;
+      const mask=isRaster(layer)?selectionOnLayer(this.selection,layer,ancestors(this.doc,layer.id)):this.selection.data;
+      this.checkIdle();this.busy=true;this.emit();
+      try{assetId=(await this.prepareMask(mask,width,height)).id;}finally{this.busy=false;}
+    }
+    this.execute([{type:'layer.mask.add',id:this.selected,assetId}],'添加图层蒙版');
+    this.editingMask=true;this.tool='brush';this.brush.color='#000000';this.brush.background='#ffffff';this.emit();
+  }
   swapColors(){const color=this.brush.color;this.brush.color=this.brush.background;this.brush.background=color;this.emit();}
   resetColors(){this.brush.color='#000000';this.brush.background='#ffffff';this.emit();}
   removeMask(){if(!this.selected)return;this.execute([{type:'layer.mask.remove',id:this.selected}],'删除图层蒙版');this.editingMask=false;this.viewMask=false;this.emit();}
@@ -129,7 +157,74 @@ export class Editor {
     this.execute([{type:'layer.ungroup',id:node.id}],'解散组');
     if(keep&&findNode(this.doc,keep)){this.selected=keep;this.emit();}
   }
-  crop(){if(!this.selection)fail('请先拖出裁切范围');this.execute([{type:'document.crop',box:this.selection}],'裁切画布');this.selection=null;this.tool='move';this.view?.fit();this.emit();}
+  crop(){const box=this.selection&&selectionBounds(this.selection);if(!box)fail('请先拖出裁切范围');this.execute([{type:'document.crop',box}],'裁切画布');this.selection=null;this.tool='move';this.view?.fit();this.emit();}
+  async clearSelectedPixels(){
+    const layer=this.needRaster();if(!this.selection)fail('请先建立选区');
+    this.checkIdle();this.busy=true;this.emit();
+    try{
+      const canvas=this.raster.pixels(layer),image=context(canvas).getImageData(0,0,layer.width,layer.height);
+      applyMaskColor(image.data,layer.width,layer.height,selectionOnLayer(this.selection,layer,ancestors(this.doc,layer.id)),[0,0,0,0]);
+      context(canvas).putImageData(image,0,0);
+      await this.bakeLayer(layer,canvas,'删除选区');
+    }finally{this.busy=false;this.emit();}
+  }
+  closeLasso(points:Point[],mode:Combine='replace'){
+    const next=selectionFromPolygon(this.doc.width,this.doc.height,points);
+    this.setSelection(this.selection&&mode!=='replace'?combineSelections(this.selection,next,mode):next);
+  }
+  pickWand(p:{x:number;y:number},mode:Combine='replace'){
+    const layer=this.needRaster();
+    const sample=this.raster.sample(this.doc,layer);
+    const next=selectionFromMask(this.doc.width,this.doc.height,floodMask(sample.data,this.doc.width,this.doc.height,p.x,p.y,this.selectOpts.tolerance,this.selectOpts.contiguous));
+    this.setSelection(this.selection&&mode!=='replace'?combineSelections(this.selection,next,mode):next);
+  }
+  async bucket(p:{x:number;y:number}){
+    const layer=this.needRaster();
+    this.checkIdle();this.busy=true;this.emit();
+    try{
+      const local=localPoint(p,composeOntoRaster(layer,ancestors(this.doc,layer.id)));
+      const canvas=this.raster.pixels(layer),image=context(canvas).getImageData(0,0,layer.width,layer.height);
+      let mask=floodMask(image.data,layer.width,layer.height,local.x,local.y,this.selectOpts.tolerance,this.selectOpts.contiguous);
+      if(this.selection)mask=andMasks(mask,selectionOnLayer(this.selection,layer,ancestors(this.doc,layer.id)));
+      applyMaskColor(image.data,layer.width,layer.height,mask,parseHex(this.brush.color));
+      context(canvas).putImageData(image,0,0);
+      await this.bakeLayer(layer,canvas,'填充');
+    }finally{this.busy=false;this.emit();}
+  }
+  async mergeDown(){
+    if(!this.selected)fail('请先选中图层');
+    const loc=locateNode(this.doc,this.selected);if(loc.index===0)fail('没有可向下合并的图层');
+    this.checkIdle();this.busy=true;this.emit();
+    try{
+      const canvas=this.raster.composite({...this.doc,layers:[loc.siblings[loc.index-1],loc.node]});
+      const prepared=await this.assets.prepare(await toBlob(canvas));this.assets.accept([prepared]);
+      this.busy=false;
+      this.execute([{type:'layer.mergeDown',id:loc.node.id,assetId:prepared.asset.id,width:canvas.width,height:canvas.height,x:this.doc.width/2,y:this.doc.height/2}],'向下合并');
+      this.selected=loc.siblings[loc.index-1].id;
+    }finally{this.busy=false;this.emit();}
+  }
+  async flattenVisible(){
+    this.checkIdle();this.busy=true;this.emit();
+    try{
+      const canvas=this.raster.composite(this.doc);
+      const prepared=await this.assets.prepare(await toBlob(canvas));this.assets.accept([prepared]);
+      this.busy=false;
+      this.execute([{type:'document.flatten',visibleOnly:true,assetId:prepared.asset.id,width:canvas.width,height:canvas.height}],'拼合可见图层');
+    }finally{this.busy=false;this.emit();}
+  }
+  private needRaster(){if(!this.active)fail('请先选中图层');return requireRaster(this.active);}
+  private async bakeLayer(layer:RasterLayer,canvas:HTMLCanvasElement,label:string){
+    const prepared=await this.assets.prepare(await toBlob(canvas));this.assets.accept([prepared]);
+    this.busy=false;
+    this.execute([{type:'layer.bake',id:layer.id,assetId:prepared.asset.id,width:canvas.width,height:canvas.height}],label);
+  }
+  private async prepareMask(data:Uint8Array,width:number,height:number){
+    const canvas=surface(width,height),image=context(canvas).createImageData(width,height),p=image.data;
+    for(let i=0;i<data.length;i++){const v=data[i];p[i*4]=p[i*4+1]=p[i*4+2]=v;p[i*4+3]=255;}
+    context(canvas).putImageData(image,0,0);
+    const prepared=await this.assets.prepare(await toBlob(canvas));this.assets.accept([prepared]);
+    return prepared.asset;
+  }
   async example(){
     this.checkIdle();const bg=surface(1200,900),b=context(bg);b.fillStyle='#e7e4dc';b.fillRect(0,0,1200,900);b.fillStyle='#c3c4b8';b.fillRect(0,600,1200,300);b.fillStyle='#74776a';b.font='500 28px system-ui';b.fillText('S T U D I O   /   0 1',75,90);
     const art=surface(680,680),a=context(art);a.fillStyle='#78866b';a.beginPath();a.roundRect(160,110,360,510,[160,160,24,24]);a.fill();a.fillStyle='#c9cebf';a.beginPath();a.ellipse(340,110,180,62,0,0,Math.PI*2);a.fill();a.fillStyle='#4b5843';a.beginPath();a.ellipse(340,110,110,31,0,0,Math.PI*2);a.fill();
